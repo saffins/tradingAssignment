@@ -7,43 +7,37 @@ import java.util.concurrent.*;
 
 public class MarketDataService {
 
-    private final ConcurrentMap<String, MarketTick> ticks = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private final List<String> isins = List.of("US0001", "US0002", "GB0001", "JP0001");
+    private final ConcurrentHashMap<String, MarketTick> ticks = new ConcurrentHashMap<>();
+    private final Random rnd = new Random();
+
+    private final List<String> sampleIsins =
+            Arrays.asList("US0001", "US0002", "US0003", "DE0001", "IN0001");
 
     public void start() {
-        for (String isin : isins) {
-            ticks.put(isin, new MarketTick(isin, 100.0, System.currentTimeMillis()));
-        }
-        scheduler.scheduleAtFixedRate(this::tick, 0, 300, TimeUnit.MILLISECONDS);
+        Executors.newSingleThreadScheduledExecutor()
+                .scheduleAtFixedRate(this::updateTicks, 0, 500, TimeUnit.MILLISECONDS);
     }
 
-    private void tick() {
-        for (String isin : isins) {
-            var last = ticks.get(isin);
-            double newPrice = Math.max(
-                    0.01,
-                    Math.round((last.getPrice() + randomVolatility()) * 100.0) / 100.0
-            );
-            ticks.put(isin, new MarketTick(isin, newPrice, System.currentTimeMillis()));
+    /** Generate new prices randomly */
+    private void updateTicks() {
+        for (String isin : sampleIsins) {
+            double price = 80 + rnd.nextDouble() * 40;
+            ticks.put(isin, new MarketTick(isin, price, System.currentTimeMillis()));
         }
-    }
-
-    private double randomVolatility() {
-        return ThreadLocalRandom.current().nextDouble(-0.8, 0.8);
     }
 
     public MarketTick getLatest(String isin) {
-        return ticks.get(isin);
+        return ticks.getOrDefault(isin,
+                new MarketTick(isin, 100, System.currentTimeMillis()));
     }
 
-    // naive average (latest) for demo
-    public double getAveragePrice(String isin, int samples) {
-        MarketTick t = ticks.get(isin);
-        return t == null ? -1.0 : t.getPrice();
+    public double getAveragePrice(String isin, int window) {
+        // simple: use last price +/- random small variation
+        MarketTick t = getLatest(isin);
+        return t.getPrice() * (0.98 + rnd.nextDouble() * 0.04);
     }
 
-    public List<String> getAllIsins() {
-        return Collections.unmodifiableList(isins);
+    public Set<String> getAllIsins() {
+        return ticks.keySet();
     }
 }
