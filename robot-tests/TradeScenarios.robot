@@ -4,7 +4,6 @@ Library    Collections
 Library    BuiltIn
 Library    OperatingSystem
 Library    String
-Resource   ./keywords.robot
 Suite Setup       Setup Test Session
 
 *** Variables ***
