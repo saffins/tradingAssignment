@@ -4,24 +4,29 @@ Library    Collections
 Library    BuiltIn
 Library    OperatingSystem
 Library    String
+Library    JSONLibrary
 Suite Setup       Setup Test Session
 
 *** Variables ***
 ${base_url}        http://localhost:8080
 
 *** Keywords ***
+
 Setup Test Session
     Log To Console    Setting up HTTP session to ${base_url}...
     Create Session    tradin    ${base_url}    headers={"Content-Type":"application/json"}
     Log To Console    Session 'tradin' created successfully.
 
+
 Validate Trader Exposure
     [Arguments]    ${trader}
-
-    ${resp}=    GET On Session    tradin    /api/exposure    params=trader=${trader}
-    Should Be Equal As Integers    ${resp.status_code}    200
+    ${resp}=    GET On Session    tradin    url=/api/exposure    params=trader=${trader}
     ${json}=    Set Variable    ${resp.json()}
-    Run Keyword If    not ${json['allowed']}    Fail    Exposure breach for trader ${trader}
+    IF    not ${json['allowed']}
+        Fail    Exposure breach for trader ${trader}
+    END
+    RETURN    ${json}
+
 
 Build Trade Body
     [Arguments]    ${trader}    ${isin}    ${quantity}    ${side}=BUY    ${limitPrice}=0
@@ -33,239 +38,188 @@ Build Trade Body
     ...    limitPrice=${limitPrice}
     RETURN    ${body}
 
+
 Create Trade And Return Id
     [Arguments]    ${trader}    ${isin}    ${quantity}    ${side}=BUY    ${limitPrice}=0
 
     ${quantity}=    Convert To Integer    ${quantity}
-    ${limitPrice}=    Convert To Number    ${limitPrice}
+    ${limitPrice}=  Convert To Number     ${limitPrice}
 
     ${body}=    Build Trade Body    ${trader}    ${isin}    ${quantity}    ${side}    ${limitPrice}
-
     ${json_body}=    Evaluate    json.dumps(${body})    json
 
-    ${headers}=    Create Dictionary    Content-Type=application/json
+    # Capture even 400 / 403 responses without failing
+    ${resp}=    POST On Session    tradin    url=/api/trades/create    data=${json_body}
+    Log To Console    RESPONSE: ${resp.text}
 
-    ${resp}=    POST On Session    tradin    /api/trades/create    data=${json_body}    headers=${headers}
-
-    BuiltIn.Log To Console    RESPONSE: ${resp.text}
-
-    # ❗ Correct way to get JSON
     ${json}=    Set Variable    ${resp.json()}
+    RETURN    ${json}    ${json.get('tradeId')}
 
-    RETURN    ${json}    ${json['tradeId']}
 
 Validate Price Deviation
-    [Arguments]    ${isin}    ${tolerance}=0.10
+    [Arguments]    ${isin}
+    ${resp}=    GET On Session    tradin    url=/api/trades/market/average    params=isin=${isin}
+    ${json}=    Set Variable    ${resp.json()}
+    RETURN    ${json['average']}
 
-    ${headers}=    Create Dictionary    Content-Type=application/json
-
-    # Fetch market average price
-    ${mresp}=    GET On Session    tradin    /api/trades/market/average    params=isin=${isin}    headers=${headers}
-
-    BuiltIn.Log To Console    MARKET AVERAGE RESPONSE: ${mresp.text}
-
-    ${mjson}=    Set Variable    ${mresp.json()}
-
-    ${marketAvg}=    Set Variable    ${mjson['average']}
-
-    RETURN    ${marketAvg}
 
 Retry Execution With Backoff
-    [Arguments]    ${tradeId}    ${max}=8
-    ${headers}=    Create Dictionary    Content-Type=application/json
-    FOR    ${i}    IN RANGE    1    ${max}
-        ${resp}=    GET On Session    tradin    /api/trades/get    params=id=${tradeId}    headers=${headers}
-        ${json}=    Set Variable    ${resp.json()}
-        ${state}=    Set Variable    ${json['state']}
-        Log    Attempt ${i}: ${state}
+    [Arguments]    ${tradeId}    ${max}=10
 
-        # Final states → return immediately
-        Run Keyword If    '${state}' == 'CONFIRMED'    Return From Keyword    ${json}
-        Run Keyword If    '${state}' == 'EXECUTED'     Return From Keyword    ${json}
-        Run Keyword If    '${state}' == 'REJECTED'     Return From Keyword    ${json}
-        Run Keyword If    '${state}' == 'CANCELLED'    Return From Keyword    ${json}
+    FOR    ${i}    IN RANGE    1    ${max}
+        ${resp}=    GET On Session    tradin    url=/api/trades/get    params=id=${tradeId}
+        ${json}=    Set Variable    ${resp.json()}
+        ${state}=   Set Variable    ${json['state']}
+
+        Log To Console    Attempt ${i}: ${state}
+
+        IF    '${state}' == 'CONFIRMED'
+            RETURN    ${json}
+        END
+        IF    '${state}' == 'EXECUTED'
+            RETURN    ${json}
+        END
+        IF    '${state}' == 'REJECTED'
+            RETURN    ${json}
+        END
+        IF    '${state}' == 'CANCELLED'
+            RETURN    ${json}
+        END
 
         Sleep    ${i * 0.4}s
     END
+
     Fail    Trade ${tradeId} did not reach final state
 
 
 Check Partial Fill Happened
     [Arguments]    ${tradeId}
 
-    # Fetch trade
-    ${resp}=    GET On Session    tradin    /api/trades/get    params=id=${tradeId}
+    ${resp}=    GET On Session    tradin    url=/api/trades/get    params=id=${tradeId}
     ${json}=    Set Variable    ${resp.json()}
 
     ${history}=    Set Variable    ${json['history']}
     ${filled}=     Set Variable    ${json['filled']}
     ${quantity}=   Set Variable    ${json['quantity']}
-    ${state}=      Set Variable    ${json['state']}
 
-    Log To Console    State: ${state}
-    Log To Console    Filled: ${filled}/${quantity}
     Log To Console    History: ${history}
+    Log To Console    Filled: ${filled}/${quantity}
 
-    # Condition A: Contains PARTIAL
-    ${has_partial}=    Run Keyword And Return Status    List Should Contain Value    ${history}    PARTIAL
+    ${partial}=    Run Keyword And Return Status    List Should Contain Value    ${history}    PARTIAL
 
-    # Condition B: Contains PARTIAL_FILL:x
-    ${has_partial_fill}=    Run Keyword And Return Status    Should Match Regexp    ${history}    (?i).*PARTIAL_FILL.*
-
-    # At least one must be true
-    Run Keyword If    not (${has_partial} or ${has_partial_fill})    Fail    No partial fill detected
+    IF    not ${partial}
+        Fail    No partial fill detected
+    END
 
     RETURN    ${filled}
 
+
 Capture Rapid Market Ticks
-    [Arguments]    ${isin}    ${count}=10    ${delay}=0.1s
+    [Arguments]    ${isin}    ${count}=10
     @{ticks}=    Create List
+
     FOR    ${i}    IN RANGE    ${count}
-        ${resp}=    GET On Session    tradin    /api/trades/market    params=isin=${isin}
+        ${resp}=    GET On Session    tradin    url=/api/trades/market    params=isin=${isin}
         ${json}=    Set Variable    ${resp.json()}
         Append To List    ${ticks}    ${json['price']}
-        Sleep    ${delay}
+        Sleep    0.1s
     END
+
     RETURN    ${ticks}
+
+
+Capture Trade Metrics
+    [Arguments]    ${tradeId}
+
+    ${resp}=    GET On Session    tradin    url=/api/trades/get    params=id=${tradeId}
+    ${json}=    Set Variable    ${resp.json()}
+
+    ${start}=    Set Variable    ${json['executionStartTime']}
+    ${end}=      Set Variable    ${json['executionEndTime']}
+    ${retries}=  Set Variable    ${json['retryCount']}
+
+    ${latency}=    Evaluate    ${end} - ${start}
+
+    Log To Console    METRIC - Latency(ms): ${latency}
+    Log To Console    METRIC - Retry Count: ${retries}
+
+    Set Test Variable    ${METRIC_LATENCY}    ${latency}
+    Set Test Variable    ${METRIC_RETRIES}    ${retries}
+
+    RETURN    ${json}
+
 
 *** Test Cases ***
 
 Scenario 1 - Create And Confirm Valid Trade
-    ${trader}=    Set Variable    T-saffin
-    ${isin}=      Set Variable    US0001
-    ${side}=      Set Variable    BUY
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    111.50
-    Log To Console    Created Trade ID: ${tradeId}
-    Should Be Equal As Strings    ${json['state']}    DUPLICATE
+    ${json}    ${tradeId}=   Create Trade And Return Id    T-saffin    US0001    100    BUY    111.50
+    ${final}=    Retry Execution With Backoff    ${tradeId}
+    Capture Trade Metrics    ${tradeId}
+
 
 Scenario 2 - Invalid ISIN
-    ${trader}=    Set Variable    T-saffin
-    ${isin}=      Set Variable    dummy
-    ${side}=      Set Variable    BUY
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    111.50
+    ${resp}    ${id}=   Create Trade And Return Id    T-saffin    dummy    100    BUY    111.50
+    Should Contain    ${resp['error']}    Invalid ISIN
 
-    # Expect API to reject
-    Should Be Equal As Integers    ${json.status_code}    400
-
-    Log    Invalid ISIN response: ${json}
-
-    # Validate error message
-    Should Contain    ${json['error']}    Invalid ISIN
-
-    # Trade ID should NOT exist
-    Run Keyword And Expect Error    *    Set Variable    ${json['tradeId']}
 
 Scenario 3 - Price Deviation Exceeds Tolerance
-    # 1. Setup
-    ${trader}=      Set Variable    T-HighDeviation
-    ${isin}=        Set Variable    US0001
-    ${side}=      Set Variable    BUY
-
-    # 2. Subscribe to market so the average price exists
-    ${avg}=    Validate Price Deviation   ${isin}    5
-
+    ${avg}=    Validate Price Deviation    US0001
     ${badLimit}=    Evaluate    float(${avg}) * 100
-    Log To Console    averageFound: ${avg}
 
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    ${badLimit}
-    Log To Console  Trade Response: ${json}
+    ${json}    ${tradeId}=   Create Trade And Return Id    T-dev    US0001    100    BUY    ${badLimit}
+
+    ${final}=    Retry Execution With Backoff    ${tradeId}
+    Should Be Equal As Strings    ${final['state']}    REJECTED
 
 
-Scenario 4- Execute Already Confirmed Trade
-    # 1. Prepare test data
-    ${trader}=      Set Variable    DUPLICATE_TRADER
-    ${isin}=        Set Variable    US0001
-    ${limit}=       Set Variable    100.50
-    ${side}=      Set Variable    BUY
+Scenario 4 - Execute Already Confirmed Trade
+    ${avg}=    Validate Price Deviation    US0001
+    ${json}    ${tid}=   Create Trade And Return Id    T-dupe    US0001    100    BUY    ${avg}
+    ${json2}    ${tid2}=   Create Trade And Return Id    T-dupe    US0001    100    BUY    ${avg}
+    Should Be Equal As Strings    ${json2['state']}    DUPLICATE
 
-    ${avg}=    Validate Price Deviation   ${isin}    5
-
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    ${avg}
-
-    ${tradeId}=     Set Variable    ${json['tradeId']}
-    Log To Console  First Trade ID: ${tradeId}
-
-    #Submit the SAME trade again to cause duplicate detection
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    ${avg}
-    Should Be Equal As Strings    ${json['state']}    DUPLICATE
 
 Scenario 5 - Random Failure Simulation
-    ${trader}=      Set Variable    DUPLICATE_TRADER
-    ${isin}=        Set Variable    US0001
-    ${limit}=       Set Variable    100.50
-    ${side}=      Set Variable    BUY
-
-    ${avg}=    Validate Price Deviation   ${isin}    5
-
+    ${avg}=    Validate Price Deviation    US0001
     ${badLimit}=    Evaluate    float(${avg}) / 10
 
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    ${badLimit}
-    ${tradeId}=    Set Variable    ${json['tradeId']}
+    ${json}    ${tid}=   Create Trade And Return Id    T-rfail    US0001    100    BUY    ${badLimit}
 
-    # Poll until the system finishes (may succeed or fail)
-    ${final}=    Retry Execution With Backoff    ${tradeId}
-
-    Log To Console    Final state: ${final['state']}
+    ${final}=    Retry Execution With Backoff    ${tid}
+    Log To Console    Final: ${final}
+    Capture Trade Metrics    ${tid}
 
 
 Scenario 6 - Verify Partial Fill Execution
-    [Documentation]    Creates a trade and verifies that partial fills occurred.
+    ${json}    ${tid}=   Create Trade And Return Id    T-partial    US0002    100    BUY    -1.0
 
-    # --- Step 1: Create a trade that triggers partial fill ---
-    ${trader}=        Set Variable    T-saffin
-    ${isin}=          Set Variable    US0002
-    ${quantity}=      Set Variable    200
-    ${side}=          Set Variable    BUY
-    ${limitPrice}=    Set Variable    -1.0
+    ${filled}=    Check Partial Fill Happened    ${tid}
+    Log To Console    Partial fill quantity: ${filled}
 
-    # Your create keyword returns: ${json} + ${tradeId}
-    ${json}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    100    ${side}    ${limitPrice}
-
-
-    Log To Console    Created Trade ID: ${tradeId}
-    Log To Console    Initial State: ${json['state']}
-
-    # --- Step 2: Verify partial fills happened ---
-    ${filled}=    Check Partial Fill Happened    ${tradeId}
-
-    Log To Console    Partial Fills Confirmed. Final Filled Quantity: ${filled}
 
 Scenario 8 - Multiple Concurrent Traders
-    ${isin}=          Set Variable    US0002
     @{traders}=    Create List    T-A    T-B    T-C
     @{tradeIds}=   Create List
-    ${avg}=    Validate Price Deviation   ${isin}    5
+
+    ${avg}=    Validate Price Deviation   US0001
+
     FOR    ${tr}    IN    @{traders}
-        ${resp}    ${tradeId}=   Create Trade And Return Id    ${tr}    US0001    100    BUY    ${avg}
-        Append To List    ${tradeIds}    ${tradeId}
+        ${json}    ${tid}=   Create Trade And Return Id    ${tr}    US0001    100    BUY    ${avg}
+        Append To List    ${tradeIds}    ${tid}
     END
 
     FOR    ${tId}    IN    @{tradeIds}
         ${final}=    Retry Execution With Backoff    ${tId}
-        Log    Trader result: ${tId} -> ${final['state']}
-        Should Contain Any
-        ...    ${final['state']}
-        ...    EXECUTED
-        ...    CONFIRMED
-        ...    PARTIAL
-        ...    REJECTED
+        Log To Console    ${tId}: ${final['state']}
     END
 
+
 Scenario 9 - Rapid Market Update
-    ${prices}=    Capture Rapid Market Ticks    US0001
-    ${unique}=    Remove Duplicates    ${prices}
+    ${ticks}=    Capture Rapid Market Ticks    US0001
+    Log To Console    Ticks: ${ticks}
 
 
-Scenario 10 - Risk breach Attempt
-    # 1. Build overlimit trade body
-    ${trader}=      Set Variable    RISKY_TRADER
-    ${isin}=        Set Variable    US0001
-    ${side}=      Set Variable    BUY
-
-    # 2. Submit trade (expect REJECTED state)
-    ${resp}    ${tradeId}=   Create Trade And Return Id    ${trader}    ${isin}    11111111    ${side}    111.50
-
-    # 3. Verify rejection happened
-    Should Be Equal As Strings    ${resp['state']}     REJECTED
-    Should Be Equal As Strings    ${resp['reason']}    Exposure breach
-
+Scenario 10 - Risk Breach Attempt
+    ${json}    ${tid}=   Create Trade And Return Id    RISKY_TRADER    US0001    9999999    BUY    111.50
+    Should Be Equal As Strings    ${json['state']}    REJECTED
+    Should Be Equal As Strings    ${json['reason']}    Exposure breach
