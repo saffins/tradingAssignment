@@ -49,7 +49,7 @@ Create Trade And Return Id
     ${json_body}=    Evaluate    json.dumps(${body})    json
 
     # Capture even 400 / 403 responses without failing
-    ${resp}=    POST On Session    tradin    url=/api/trades/create    data=${json_body}
+    ${resp}=    POST On Session    tradin    url=/api/trades/create    data=${json_body}    expected_status=any
     Log To Console    RESPONSE: ${resp.text}
 
     ${json}=    Set Variable    ${resp.json()}
