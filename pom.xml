@@ -110,26 +110,7 @@
             </plugin>
 
             <!-- Robot Framework Maven Plugin -->
-            <plugin>
-                <groupId>org.robotframework</groupId>
-                <artifactId>robotframework</artifactId>
-                <version>4.1.2</version>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <testCasesDirectory>${project.basedir}/src/test/resources/robot/tests</testCasesDirectory>
-                    <outputDirectory>${project.build.directory}/robotframework-reports</outputDirectory>
-                    <logLevel>INFO</logLevel>
-                    <variables>
-                        <ENV>test</ENV>
-                    </variables>
-                </configuration>
-            </plugin>
+
 
             <!-- Allure Plugin -->
             <plugin>
