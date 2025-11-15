@@ -1,0 +1,60 @@
+name: Robot Tests CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  robot-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build Java backend
+        run: mvn -q -DskipTests package
+
+      - name: Start mock server
+        # start server in background and wait for port
+        run: |
+          nohup java -jar target/*.jar > server.log 2>&1 &
+          # wait for server to be ready
+          for i in {1..20}; do
+            if curl -sSf http://localhost:8080/ >/dev/null 2>&1; then
+              echo "server ready"; break
+            fi
+            echo "waiting for server..."
+            sleep 1
+          done
+        shell: bash
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Robot deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install robotframework robotframework-requests robotframework-jsonlibrary allure-robotframework
+
+      - name: Run Robot tests (Allure listener)
+        run: |
+          robot --listener allure_robotframework robot-tests/
+
+      - name: Upload Robot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-results
+          path: |
+            output.xml
+            log.html
+            report.html
+            allure-results/
