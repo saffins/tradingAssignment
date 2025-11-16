@@ -1,9 +1,10 @@
 **This project is a small end-to-end mock of a bond trading workflow.
 The goal was to simulate how a real electronic trading platform behaves when traders submit orders under moving markets, risk limits, partial fills, and random failures.
-Everything is intentionally lightweight — the backend is a simple Java server and the tests are written in Robot Framework, but the flows mimic real fixed-income trading systems.
+Everything is intentionally lightweight — the backend is a simple Java server and the tests are written in Robot Framework, but the flows mimic real fixed-income trading systems.**
 
 🔎 What the Project Contains
-1. Java Mock Trading Backend
+
+Java Mock Trading Backend
 
 The Java backend simulates several components that normally run in production trading systems:
 
@@ -35,6 +36,12 @@ WebSocket running → ws://localhost:8090
 
 You can now hit endpoints using Postman or curl.
 
+<img width="1360" height="862" alt="image" src="https://github.com/user-attachments/assets/d5aa638e-f5a9-4d23-b355-0032c0e805c9" />
+
+
+<img width="2276" height="1344" alt="image" src="https://github.com/user-attachments/assets/cba33131-b8a2-48c0-9301-1703a57132e7" />
+
+
 Step 2 — Start your Python virtual environment
 
 From your Robot tests folder:
@@ -42,43 +49,12 @@ From your Robot tests folder:
 Windows:
 .venv\Scripts\activate
 
-macOS/Linux:
-source .venv/bin/activate
+<img width="1468" height="1378" alt="image" src="https://github.com/user-attachments/assets/05c93ecb-0702-4e2e-89c5-203cda5caf0c" />
 
 
-Check that Robot is installed:
+Step 3 - view you trade metrics below
 
-robot --version
-
-Step 3 — Run the Robot Tests
-
-Once the Java server is running and your venv is active:
-
-robot robot-tests/TradeScenarios.robot
+<img width="1520" height="1345" alt="image" src="https://github.com/user-attachments/assets/818f1af2-cfed-4a56-8c8b-2b7504a8c6e6" />
 
 
-Robot will execute all trade scenarios:
 
-valid trade
-
-invalid ISIN
-
-price deviation
-
-retries
-
-multiple traders
-
-partial fills
-
-rapid market updates
-
-cancellation flow
-
-When done, it generates:
-
-log.html
-
-report.html
-
-output.xml**
